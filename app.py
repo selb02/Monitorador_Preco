@@ -12,6 +12,7 @@ load_dotenv()
 
 SEU_EMAIL = os.getenv('SEU_EMAIL')
 SENHA_APP_EMAIL = os.getenv('SENHA_APP_EMAIL')
+ML_ACCESS_TOKEN = os.getenv('ML_ACCESS_TOKEN')
 
 # Novos parâmetros para a biblioteca oficial
 SUPABASE_URL = os.getenv('SUPABASE_URL')
@@ -26,38 +27,40 @@ app = Flask(__name__)
 # FUNÇÕES AUXILIARES
 # ==========================================
 
-def extrair_id_ml(url):
-    """Usa Regex para extrair o ID do Mercado Livre (ex: MLB123456)."""
-    match_wid = re.search(r'wid=(MLB\d+)', url)
-    if match_wid:
-        return match_wid.group(1)
+def extrair_info_ml(url):
+    """
+    Retorna o ID e o Tipo (items ou products) baseado na URL.
+    """
+    # Identifica se é Produto de Catálogo (/p/MLB...)
+    match_product = re.search(r'/p/(MLB\d+)', url)
+    if match_product:
+        return match_product.group(1), "products"
     
-    match_padrao = re.search(r'(MLB\d+)', url)
-    if match_padrao:
-        return match_padrao.group(1)
+    # Identifica se é Item comum (MLB...)
+    match_item = re.search(r'(MLB\d+|MLB-\d+)', url)
+    if match_item:
+        clean_id = match_item.group(1).replace('-', '')
+        return clean_id, "items"
         
-    return None
+    return None, None
 
 def enviar_email(preco, titulo, link):
-    """Envia o email de alerta."""
     msg = EmailMessage()
-    msg['Subject'] = f"Alerta Mercado Livre: Baixou para R$ {preco:.2f}!"
+    msg['Subject'] = f"Alerta Mercado Livre: R$ {preco:.2f}!"
     msg['From'] = SEU_EMAIL
     msg['To'] = SEU_EMAIL
     
-    corpo_email = f"O produto baixou!\n\nProduto: {titulo}\nPreço Atual: R$ {preco:.2f}\n\nCompre aqui: {link}"
+    corpo_email = f"O produto baixou!\n\nProduto: {titulo}\nPreço Atual: R$ {preco:.2f}\n\nLink: {link}"
     msg.set_content(corpo_email)
 
     try:
         server = smtplib.SMTP('smtp.gmail.com', 587)
-        server.ehlo()
         server.starttls()
         server.login(SEU_EMAIL, SENHA_APP_EMAIL)
         server.send_message(msg)
-        print(f"ALERTA ENVIADO: {titulo}")
         server.quit()
     except Exception as e:
-        print(f"Erro ao enviar email: {e}")
+        print(f"Erro email: {e}")
 
 # ==========================================
 # ROTAS DA API
@@ -86,43 +89,65 @@ def adicionar_link():
 
 @app.route('/verificar_precos', methods=['GET', 'POST'])
 def verificar_precos():
-    """Rota que varre o banco via cliente Supabase, checa a API do ML e envia os emails."""
     try:
-        # Usando a biblioteca oficial para buscar todos os dados
         response = supabase.table("links").select("*").execute()
         produtos = response.data
     except Exception as e:
-        return jsonify({"erro": f"Erro no Supabase: {str(e)}"}), 500
+        return jsonify({"erro": f"Erro Supabase: {str(e)}"}), 500
 
     resultados = []
+    headers = {
+        "Authorization": f"Bearer {ML_ACCESS_TOKEN}"
+    }
 
     for produto in produtos:
-        db_id = produto['id']
         link = produto['link']
         preco_alvo = produto['preco']
         
-        id_ml = extrair_id_ml(link)
+        id_ml, tipo_api = extrair_info_ml(link)
         
         if not id_ml:
-            resultados.append({"link": link, "status": "Erro: ID do ML não encontrado"})
+            resultados.append({"link": link, "status": "Erro: ID não identificado"})
             continue
 
-        url_api = f"https://api.mercadolibre.com/items/{id_ml}"
+        # Define a URL da API baseada no tipo (items ou products)
+        url_api = f"https://api.mercadolibre.com/{tipo_api}/{id_ml}"
         
         try:
-            resposta = requests.get(url_api)
+            resposta = requests.get(url_api, headers=headers)
+            
             if resposta.status_code == 200:
                 dados_ml = resposta.json()
-                preco_atual = float(dados_ml.get('price'))
-                titulo = dados_ml.get('title')
                 
-                if preco_atual <= preco_alvo:
-                    enviar_email(preco_atual, titulo, link)
-                    resultados.append({"produto": titulo, "preco_atual": preco_atual, "status": "Alerta enviado"})
+                # Extração de preço varia conforme o tipo
+                if tipo_api == "products":
+                    # No catálogo, o preço vem do vencedor da 'Buy Box'
+                    winner = dados_ml.get('buy_box_winner')
+                    preco_atual = winner.get('price') if winner else None
+                    titulo = dados_ml.get('name')
                 else:
-                    resultados.append({"produto": titulo, "preco_atual": preco_atual, "status": "Preço ainda alto"})
+                    # No item comum, o preço é direto
+                    preco_atual = dados_ml.get('price')
+                    titulo = dados_ml.get('title')
+
+                if preco_atual is None:
+                    resultados.append({"produto": titulo, "status": "Erro: Preço não disponível no momento"})
+                    continue
+
+                atingiu_meta = preco_atual <= preco_alvo
+                
+                if atingiu_meta:
+                    enviar_email(preco_atual, titulo, link)
+                
+                resultados.append({
+                    "produto": titulo,
+                    "preco_atual": preco_atual,
+                    "preco_alvo": preco_alvo,
+                    "status": "Alerta enviado" if atingiu_meta else "Preço ainda alto",
+                    "tipo": tipo_api
+                })
             else:
-                resultados.append({"id_ml": id_ml, "status": f"Erro na API ML ({resposta.status_code})"})
+                resultados.append({"id_ml": id_ml, "status": f"Erro API ML ({resposta.status_code})"})
                 
         except Exception as e:
             resultados.append({"id_ml": id_ml, "status": f"Erro de requisição: {e}"})
