@@ -12,6 +12,17 @@ def listar_contas_por_prioridade(prioridade):
     contas = Conta.query.filter_by(PRIORIDADE=prioridade).all()
     return [{'IDCONTA': c.IDCONTA, 'NOMECONTA': c.NOMECONTA, 'PRIORIDADE': c.PRIORIDADE, 'PRECO': c.PRECO, 'DATAVENCIMENTO': str(c.DATAVENCIMENTO)} for c in contas]
 
+def listar_historico_contas():
+    # Busca todas as contas que NÃO estão 'ativas'
+    contas = Conta.query.filter(Conta.STATUS != 'ativo').all()
+    return [{
+        'IDCONTA': c.IDCONTA, 
+        'NOMECONTA': c.NOMECONTA, 
+        'PRECO': c.PRECO, 
+        'DATAVENCIMENTO': str(c.DATAVENCIMENTO), 
+        'STATUS': c.STATUS
+    } for c in contas]
+
 def criar_conta(data):
     nova_conta = Conta(
         NOMECONTA=data['NOMECONTA'],
@@ -40,26 +51,48 @@ def criar_conta(data):
     email_dest = data.get('EMAIL_DESTINO', Config.EMAIL_ADDRESS)
     now = datetime.now()
     
+    # 1. Email de Pagamento
     if nova_conta.DATAPAGAMENTO:
         run_date_pag = datetime.combine(nova_conta.DATAPAGAMENTO, datetime.min.time())
-        if run_date_pag > now:
+        if nova_conta.DATAPAGAMENTO == now.date():
+            # Se for hoje, manda em 10 segundos
+            scheduler.add_job(
+                enviar_email, 'date', run_date=now + timedelta(seconds=10),
+                args=[f"Pagar hoje: {nova_conta.NOMECONTA}", email_dest, f"Conta: {nova_conta.NOMECONTA} | R${nova_conta.PRECO}"],
+                id=f"conta_pag_{nova_conta.IDCONTA}"
+            )
+        elif run_date_pag > now:
             scheduler.add_job(
                 enviar_email, 'date', run_date=run_date_pag,
                 args=[f"Pagar hoje: {nova_conta.NOMECONTA}", email_dest, f"Conta: {nova_conta.NOMECONTA} | R${nova_conta.PRECO}"],
                 id=f"conta_pag_{nova_conta.IDCONTA}"
             )
         
+    # 2. Email Véspera de Vencimento
     data_vespera_venc = nova_conta.DATAVENCIMENTO - timedelta(days=1)
     run_date_vespera = datetime.combine(data_vespera_venc, datetime.min.time())
-    if run_date_vespera > now:
+    if data_vespera_venc == now.date():
+        scheduler.add_job(
+            enviar_email, 'date', run_date=now + timedelta(seconds=10),
+            args=[f"Amanhã vence: {nova_conta.NOMECONTA}", email_dest, f"Atenção, vence amanhã: R${nova_conta.PRECO}"],
+            id=f"conta_venc_vespera_{nova_conta.IDCONTA}"
+        )
+    elif run_date_vespera > now:
         scheduler.add_job(
             enviar_email, 'date', run_date=run_date_vespera,
             args=[f"Amanhã vence: {nova_conta.NOMECONTA}", email_dest, f"Atenção, vence amanhã: R${nova_conta.PRECO}"],
             id=f"conta_venc_vespera_{nova_conta.IDCONTA}"
         )
     
+    # 3. Email no dia do Vencimento
     run_date_venc = datetime.combine(nova_conta.DATAVENCIMENTO, datetime.min.time())
-    if run_date_venc > now:
+    if nova_conta.DATAVENCIMENTO == now.date():
+        scheduler.add_job(
+            enviar_email, 'date', run_date=now + timedelta(seconds=10),
+            args=[f"VENCE HOJE: {nova_conta.NOMECONTA}", email_dest, f"Vencimento hoje: R${nova_conta.PRECO}"],
+            id=f"conta_venc_{nova_conta.IDCONTA}"
+        )
+    elif run_date_venc > now:
         scheduler.add_job(
             enviar_email, 'date', run_date=run_date_venc,
             args=[f"VENCE HOJE: {nova_conta.NOMECONTA}", email_dest, f"Vencimento hoje: R${nova_conta.PRECO}"],

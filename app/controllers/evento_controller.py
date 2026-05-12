@@ -51,36 +51,54 @@ def criar_evento(data):
     email_dest = data.get('EMAIL_DESTINO', Config.EMAIL_ADDRESS)
     now = datetime.now()
     
-    # Data de amanhã (Véspera do evento)
+    # --- 1. Email de Véspera (1 dia antes) ---
     data_vespera = novo_evento.DATAEVENTO - timedelta(days=1)
-    
-    # Email 1 dia antes
     run_date_vespera = datetime.combine(data_vespera, datetime.min.time())
-    if run_date_vespera > now:
+    
+    if data_vespera == now.date():
+        # Se hoje for a véspera, agenda para agora
         scheduler.add_job(
-            enviar_email, 'date', 
-            run_date=run_date_vespera,
+            enviar_email, 'date', run_date=now + timedelta(seconds=10),
+            args=[f"Evento Amanhã: {novo_evento.NOMEEVENTO}", email_dest, f"Lembrete! O evento '{novo_evento.NOMEEVENTO}' será amanhã às {novo_evento.HORARIO}."],
+            id=f"evento_vespera_{novo_evento.IDEVENTO}"
+        )
+    elif run_date_vespera > now:
+        scheduler.add_job(
+            enviar_email, 'date', run_date=run_date_vespera,
             args=[f"Evento Amanhã: {novo_evento.NOMEEVENTO}", email_dest, f"Lembrete! O evento '{novo_evento.NOMEEVENTO}' será amanhã às {novo_evento.HORARIO}."],
             id=f"evento_vespera_{novo_evento.IDEVENTO}"
         )
     
-    # Email no dia do Evento (à meia-noite)
+    # --- 2. Email no dia do Evento (Lembrete de hoje) ---
     run_date_hoje = datetime.combine(novo_evento.DATAEVENTO, datetime.min.time())
-    if run_date_hoje > now:
+    if novo_evento.DATAEVENTO == now.date():
+        # Se o evento é hoje, manda lembrete agora
         scheduler.add_job(
-            enviar_email, 'date', 
-            run_date=run_date_hoje,
+            enviar_email, 'date', run_date=now + timedelta(seconds=10),
+            args=[f"Evento Hoje: {novo_evento.NOMEEVENTO}", email_dest, f"É hoje! Seu evento '{novo_evento.NOMEEVENTO}' acontecerá às {novo_evento.HORARIO}."],
+            id=f"evento_hoje_{novo_evento.IDEVENTO}"
+        )
+    elif run_date_hoje > now:
+        scheduler.add_job(
+            enviar_email, 'date', run_date=run_date_hoje,
             args=[f"Evento Hoje: {novo_evento.NOMEEVENTO}", email_dest, f"É hoje! Seu evento '{novo_evento.NOMEEVENTO}' acontecerá às {novo_evento.HORARIO}."],
             id=f"evento_hoje_{novo_evento.IDEVENTO}"
         )
 
-    # Email no horário exato do Evento
+    # --- 3. Email no horário exato do Evento ---
     run_date_exato = datetime.combine(novo_evento.DATAEVENTO, novo_evento.HORARIO)
     if run_date_exato > now:
+        # Se o horário ainda não passou, agenda para o horário
         scheduler.add_job(
-            enviar_email, 'date', 
-            run_date=run_date_exato,
+            enviar_email, 'date', run_date=run_date_exato,
             args=[f"O evento '{novo_evento.NOMEEVENTO}' está começando!", email_dest, f"Atenção: O evento '{novo_evento.NOMEEVENTO}' agendado para as {novo_evento.HORARIO} começou agora."],
+            id=f"evento_exato_{novo_evento.IDEVENTO}"
+        )
+    elif novo_evento.DATAEVENTO == now.date():
+        # Se o evento é hoje e o horário já passou, manda agora
+        scheduler.add_job(
+            enviar_email, 'date', run_date=now + timedelta(seconds=10),
+            args=[f"O evento '{novo_evento.NOMEEVENTO}' já começou!", email_dest, f"Atenção: O evento '{novo_evento.NOMEEVENTO}' estava agendado para as {novo_evento.HORARIO} e já iniciou."],
             id=f"evento_exato_{novo_evento.IDEVENTO}"
         )
 

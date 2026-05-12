@@ -7,6 +7,10 @@ conta_bp = Blueprint('conta_bp', __name__)
 def get_contas():
     return jsonify(conta_controller.listar_contas_ativas()), 200
 
+@conta_bp.route('/CONTAS/HISTORICO', methods=['GET'])
+def get_historico():
+    return jsonify(conta_controller.listar_historico_contas()), 200
+
 @conta_bp.route('/CONTAS/<prioridade>', methods=['GET'])
 def get_contas_prioridade(prioridade):
     return jsonify(conta_controller.listar_contas_por_prioridade(prioridade)), 200
